@@ -286,3 +286,332 @@ Ajouter :
 ```cron
 0 3 * * * /usr/local/bin/backup.sh >/var/log/backup.log 2>&1
 ```
+
+---
+
+## 📊 9. Monitoring avec Prometheus + Grafana
+
+### 9.1 Prérequis
+
+- VMs Debian 13 sur le même réseau local
+- Une VM pour Prometheus + Grafana (ex : 192.168.56.10)
+- Node Exporter installé sur toutes les VMs à surveiller
+
+---
+
+## 1️⃣ Installer Prometheus
+
+### 1.1 Télécharger et installer Prometheus
+
+Créer un utilisateur Prometheus :
+```bash
+sudo useradd --no-create-home --shell /bin/false prometheus
+```
+
+Créer les dossiers nécessaires :
+```bash
+sudo mkdir /etc/prometheus
+sudo mkdir /var/lib/prometheus
+sudo chown prometheus:prometheus /etc/prometheus /var/lib/prometheus
+```
+
+Télécharger la dernière version (exemple 2.45.0) :
+```bash
+wget https://github.com/prometheus/prometheus/releases/download/v2.45.0/prometheus-2.45.0.linux-amd64.tar.gz
+tar xvf prometheus-2.45.0.linux-amd64.tar.gz
+cd prometheus-2.45.0.linux-amd64
+sudo cp prometheus promtool /usr/local/bin/
+sudo cp -r consoles console_libraries /etc/prometheus/
+sudo chown -R prometheus:prometheus /usr/local/bin/prometheus /usr/local/bin/promtool /etc/prometheus/consoles /etc/prometheus/console_libraries
+```
+
+### 1.2 Configurer Prometheus
+
+Éditer `/etc/prometheus/prometheus.yml` :
+```yaml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'node_exporter'
+    static_configs:
+      - targets:
+          - '192.168.56.10:9100'
+          - '192.168.56.20:9100'
+          - '192.168.56.30:9100'
+```
+
+⚠️ Remplace les IP par celles de tes VMs
+⚠️ Chaque VM doit avoir Node Exporter sur le port 9100
+
+### 1.3 Créer le service systemd
+
+Éditer `/etc/systemd/system/prometheus.service` :
+```ini
+[Unit]
+Description=Prometheus
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/local/bin/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/var/lib/prometheus/ \
+  --web.console.templates=/etc/prometheus/consoles \
+  --web.console.libraries=/etc/prometheus/console_libraries
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 1.4 Démarrer Prometheus
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now prometheus
+sudo systemctl status prometheus
+```
+
+Test :
+```bash
+curl http://192.168.56.10:9090/metrics
+```
+
+---
+
+## 2️⃣ Installer Node Exporter sur toutes les VMs
+
+Installer Node Exporter depuis le package Debian :
+```bash
+sudo apt update
+sudo apt install -y prometheus-node-exporter
+```
+
+Démarrer le service :
+```bash
+sudo systemctl enable --now prometheus-node-exporter
+sudo systemctl status prometheus-node-exporter
+```
+
+Tester l'accès :
+```bash
+curl http://<IP_VM>:9100/metrics
+```
+
+---
+
+## 3️⃣ Installer Grafana
+
+### 3.1 Télécharger et installer Grafana
+
+Installer les dépendances :
+```bash
+sudo apt update
+sudo apt install -y apt-transport-https software-properties-common wget
+```
+
+Ajouter la clé et le dépôt Grafana :
+```bash
+sudo mkdir -p /etc/apt/keyrings
+wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor | sudo tee /etc/apt/keyrings/grafana.gpg > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" | sudo tee /etc/apt/sources.list.d/grafana.list
+```
+
+Installer Grafana :
+```bash
+sudo apt update
+sudo apt install grafana
+```
+
+### 3.2 Démarrer Grafana
+```bash
+sudo systemctl enable --now grafana-server
+sudo systemctl status grafana-server
+```
+
+Interface web : `http://192.168.56.10:3000`
+Login par défaut : `admin / admin`
+
+---
+
+## 4️⃣ Ajouter Prometheus comme source de données dans Grafana
+
+Menu ⚙️ → Data Sources → Add data source → Prometheus
+
+URL :
+```
+http://192.168.56.10:9090
+```
+
+Clique sur « Save & Test » → doit afficher « Data source is working »
+
+---
+
+## 5️⃣ Importer le dashboard Node Exporter
+
+Menu + → Import
+
+Dashboard ID : `1860`
+
+Sélectionne la source de données Prometheus
+
+Clique sur Import
+
+Tu verras alors toutes les métriques CPU, RAM, disque, réseau de tes VMs.
+
+---
+
+## 6️⃣ Vérifications finales
+
+- ✅ Node Exporter actif sur toutes les VMs
+- ✅ Prometheus scrape toutes les IP du fichier YAML
+- ✅ Grafana récupère les métriques et le dashboard s'affiche
+
+---
+
+## 7️⃣ Optionnel : Alerting
+
+- Grafana Alerting pour CPU, RAM, Disque
+- Alertmanager pour emails, Slack ou Telegram
+
+---
+
+## 🐳 10. Installation de Docker et Docker Compose
+
+### 10.1 Installer Docker et Docker Compose
+
+Méthode simple depuis les dépôts Debian :
+```bash
+sudo apt update
+sudo apt install docker.io docker-compose -y
+sudo systemctl enable docker
+sudo systemctl start docker
+```
+
+Tester Docker :
+```bash
+docker --version
+docker-compose --version
+sudo docker run hello-world
+```
+
+✅ Si tout fonctionne, Docker est prêt à l'emploi.
+
+---
+
+### 10.2 Préparer l'arborescence du projet
+
+```bash
+sudo mkdir -p /srv/web-docker/{html,conf,certs}
+cd /srv/web-docker
+```
+
+Structure :
+- `html/` → Contient les fichiers du site web
+- `conf/` → Contient les fichiers de configuration NGINX
+- `certs/` → Contient les certificats SSL
+
+---
+
+### 10.3 Créer une page web de test
+
+```bash
+sudo nano html/index.html
+```
+
+Exemple de contenu :
+```html
+<h1>Serveur Web Docker OK</h1>
+<p>Conteneur fonctionnel</p>
+```
+
+---
+
+### 10.4 Configurer NGINX
+
+Créer un fichier minimal `/srv/web-docker/conf/default.conf` :
+```nginx
+server {
+    listen 80;
+    server_name web.monlan.local;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+```
+
+⚠️ Pour HTTPS, le serveur sera modifié ensuite pour inclure `listen 443 ssl;` et les certificats.
+
+---
+
+### 10.5 Créer le fichier Docker Compose
+
+Fichier `/srv/web-docker/docker-compose.yml` :
+```yaml
+version: "3"
+
+services:
+  web:
+    image: nginx:stable
+    container_name: web_nginx
+    ports:
+      - "80:80"
+      - "443:443"  # Ajouter si HTTPS
+    volumes:
+      - ./html:/usr/share/nginx/html:ro
+      - ./conf:/etc/nginx/conf.d:ro
+      - ./certs:/etc/nginx/ssl:ro  # Ajouter si HTTPS
+    restart: always
+```
+
+---
+
+### 10.6 Arrêter NGINX système (éviter les conflits)
+
+```bash
+sudo systemctl stop nginx
+sudo systemctl disable nginx
+sudo ss -tulnp | grep -E ':(80|443)'
+```
+
+⚠️ Assurez-vous qu'aucun service n'écoute sur les ports 80/443.
+
+---
+
+### 10.7 Lancer le serveur web Docker
+
+```bash
+cd /srv/web-docker
+sudo docker-compose up -d
+```
+
+Vérifier le conteneur :
+```bash
+sudo docker ps
+sudo docker logs web_nginx
+```
+
+Tester localement :
+```bash
+curl http://localhost
+curl -k https://localhost  # si HTTPS activé
+```
+
+---
+
+### 10.8 Accès depuis le réseau
+
+Depuis une autre machine LAN :
+```bash
+curl http://192.168.56.30
+curl -k https://web.monlan.local  # si HTTPS activé
+```
+
+- `192.168.56.30` → IP de la VM Web
+- `web.monlan.local` → Nom configuré dans le DNS interne (Bind9)
